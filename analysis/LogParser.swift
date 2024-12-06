@@ -56,15 +56,10 @@ class LogParser: AftermathModule {
                 self.addTextToFile(atUrl: self.storylineFile, text: text)
             }
         } catch {
-            print("Unable to parse contents")
+            self.log("Unable to parse install log contents")
         }
     }
-    
-    fileprivate func sanatizeInfo(_ info: inout String) {
-        info = info.replacingOccurrences(of: ",", with: "")
-        info = info.replacingOccurrences(of: "\"", with: "")
-    }
-    
+
     func parseSysLog() {
         // system.log
         
@@ -81,7 +76,7 @@ class LogParser: AftermathModule {
                 let dateFormatter = DateFormatter()
                 dateFormatter.locale = Locale(identifier: "en_US")
                 dateFormatter.dateFormat = "MMM dd yyyy HH:mm:ss"
-                dateFormatter.timeZone = TimeZone(secondsFromGMT: 0)
+                dateFormatter.timeZone = .current
                 
                 let currentYear = Calendar(identifier: .gregorian).dateComponents([.year], from: .now).year
                 guard let month = splitLine[safe: 0] else { continue } // Feb
@@ -98,10 +93,15 @@ class LogParser: AftermathModule {
                 
                 sanatizeInfo(&info)
 
-                let unformattedTimestamp = "\(month) \(date) \(currentYear!) \(time)"
+                let unformattedTimestamp = "\(month) \(date) \(currentYear!) \(time)" // "Aug 26 2022 00:01:40"
+
                 
-                guard let formatted = dateFormatter.date(from: unformattedTimestamp) else { continue } //Ex: 2022-08-26 00:01:40 UTC
+                
+                
+                guard let formatted = dateFormatter.date(from: unformattedTimestamp) else { continue } //Ex: 2022-08-26 07:01:40 UTC
                 dateFormatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'"
+                dateFormatter.timeZone = TimeZone(secondsFromGMT: 0)
+                
                 let dateString = dateFormatter.string(from: formatted)
             
                 let text = "\(dateString), SYSLOG, \(info)"
@@ -109,7 +109,7 @@ class LogParser: AftermathModule {
                 self.addTextToFile(atUrl: storylineFile, text: text)
             }
         } catch {
-            print("Unable to parse contents")
+            self.log("Unable to parse syslog contents")
         }
     }
     
@@ -141,16 +141,21 @@ class LogParser: AftermathModule {
                 
                 sanatizeInfo(&info)
                 
-                guard let dateZome = dateFormatter.date(from: unformattedDate) else { continue }
+                guard let dateZone = dateFormatter.date(from: unformattedDate) else { continue }
                 dateFormatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'"
-                let formattedDate = dateFormatter.string(from: dateZome)
+                let formattedDate = dateFormatter.string(from: dateZone)
                 let text = "\(formattedDate), XPROTECT_REMEDIATOR, \(info)"
                 self.addTextToFile(atUrl: logsFile, text: text)
                 self.addTextToFile(atUrl: self.storylineFile, text: text)
             }
         } catch {
-            print("Unable to parse contents")
+            self.log("Unable to parse XPR contents")
         }
+    }
+    
+    fileprivate func sanatizeInfo(_ info: inout String) {
+        info = info.replacingOccurrences(of: ",", with: "")
+        info = info.replacingOccurrences(of: "\"", with: "")
     }
     
     func run() {

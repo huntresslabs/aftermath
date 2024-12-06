@@ -16,8 +16,8 @@
      static let pretty = Options(rawValue: 1 << 3)
      static let collectDirs = Options(rawValue: 1 << 4)
      static let unifiedLogs = Options(rawValue: 1 << 5)
-     static let disableBrowserKillswitch = Options(rawValue: 1 << 6)
-     
+     static let esLogs = Options(rawValue: 1 << 6)
+     static let disable = Options(rawValue: 1 << 7)
  }
 
 @main
@@ -27,7 +27,9 @@ class Command {
     static var outputLocation: String = "/tmp"
     static var collectDirs: [String] = []
     static var unifiedLogsFile: String? = nil
-    static let version: String = "1.2.1"
+    static var esLogs: [String] = ["create", "exec", "mmap"]
+    static let version: String = "2.2.1"
+    static var disableFeatures: [String:Bool] = ["all": false, "browsers": false, "browser-killswitch": false, "databases": false, "filesystem": false, "proc-info": false, "slack": false, "ul": false]
     
     static func main() {
         setup(with: CommandLine.arguments)
@@ -50,12 +52,6 @@ class Command {
              case "--cleanup": Self.cleanup(defaultRun: false)
              case "-d", "--deep": Self.options.insert(.deep)
              case "--pretty": Self.options.insert(.pretty)
-             case "--disable-browser-killswitch": Self.options.insert(.disableBrowserKillswitch)
-             case "-o", "--output":
-                 if let index = args.firstIndex(of: arg) {
-                     Self.options.insert(.output)
-                     Self.outputLocation = args[index + 1]
-                 }
              case "--analyze":
                  if let index = args.firstIndex(of: arg) {
                      Self.options.insert(.analyze)
@@ -70,10 +66,46 @@ class Command {
                          i += 1
                      }
                  }
+             case "--disable":
+                 if let index = args.firstIndex(of: arg) {
+                     Self.options.insert(.disable)
+                     var i = 1
+                     while (index + i) < args.count && !args[index + i].starts(with: "-") {
+                         for k in self.disableFeatures.keys {
+                             if args[index + i] == "all" {
+                                 for k in self.disableFeatures.keys {
+                                     self.disableFeatures[k] = true
+                                 }
+                                 break
+                             }
+
+                             if args[index + i] == k {
+                                 self.disableFeatures[k] = true
+                                 break
+                             }
+                         }
+                         i += 1
+                     }
+                 }
+             case "--es-logs":
+                 if let index = args.firstIndex(of: arg) {
+                     Self.options.insert(.esLogs)
+                     self.esLogs = []
+                     var i = 1
+                     while (index + i) < args.count && !args[index + i].starts(with: "-") {
+                         self.esLogs.append(contentsOf: [args[index + i]])
+                         i += 1
+                     }
+                 }
              case "-l", "--logs":
                  if let index = args.firstIndex(of: arg) {
                      Self.options.insert(.unifiedLogs)
                      Self.unifiedLogsFile = args[index + 1]
+                 }
+             case "-o", "--output":
+                 if let index = args.firstIndex(of: arg) {
+                     Self.options.insert(.output)
+                     Self.outputLocation = args[index + 1]
                  }
              case "-v", "--version":
                  print(version)
@@ -124,8 +156,7 @@ class Command {
                  mainModule.log("Aftermath requires macOS 12 or later in order to analyze collection data.")
                  print("Aftermath requires macOS 12 or later in order to analyze collection data.")
              }
-            
-             mainModule.log("Finished analysis module")
+
 
              // Move analysis directory to output direcotry
              CaseFiles.MoveTemporaryCaseDir(outputLocation: self.outputLocation, isAnalysis: true)
@@ -141,57 +172,60 @@ class Command {
              mainModule.addTextToFile(atUrl: CaseFiles.metadataFile, text: "file,birth,modified,accessed,permissions,uid,gid,xattr,downloadedFrom")
              
 
+             // eslogger
+             if #available(macOS 13, *) {
+                  let esModule = ESModule()
+                  esModule.run()
+             } else {
+                 print("Unable to run eslogger due to unavailability on this OS. Requires macOS 13 or higher.")
+             }
+
+             
+             // tcpdump
+             let pcapModule = NetworkModule()
+             pcapModule.pcapRun()
+
+             
              // System Recon
-             mainModule.log("Started system recon")
              let systemReconModule = SystemReconModule()
              systemReconModule.run()
-             mainModule.log("Finished system recon")
 
 
              // Network
-             mainModule.log("Started gathering network information...")
              let networkModule = NetworkModule()
              networkModule.run()
-             mainModule.log("Finished gathering network information")
 
 
              // Processes
-             mainModule.log("Starting process dump...")
              let procModule = ProcessModule()
              procModule.run()
-             mainModule.log("Finished gathering process information")
 
 
              // Persistence
-             mainModule.log("Starting Persistence Module")
              let persistenceModule = PersistenceModule()
              persistenceModule.run()
-             mainModule.log("Finished logging persistence items")
 
              
              // FileSystem
-             mainModule.log("Started gathering file system information...")
              let fileSysModule = FileSystemModule()
              fileSysModule.run()
-             mainModule.log("Finished gathering file system information")
-
+             
+             
 
              // Artifacts
-             mainModule.log("Started gathering artifacts...")
              let artifactModule = ArtifactsModule()
              artifactModule.run()
-             mainModule.log("Finished gathering artifacts")
 
+             
              // Logs
-             mainModule.log("Started logging unified logs")
              let unifiedLogModule = UnifiedLogModule(logFile: unifiedLogsFile)
              unifiedLogModule.run()
-             mainModule.log("Finished logging unified logs")
              
+                          
              mainModule.log("Finished running Aftermath collection")
              
              // Copy from cache to output
-             CaseFiles.MoveTemporaryCaseDir(outputLocation: self.outputLocation, isAnalysis: false)
+             CaseFiles.MoveTemporaryCaseDir(outputLocation: self.outputLocation.expandingTildeInPath(), isAnalysis: false)
 
              // End Aftermath
              mainModule.log("Aftermath Finished")
@@ -202,9 +236,6 @@ class Command {
          // remove any aftermath directories from /var/folders/zz and clean up /tmp if running this as a standalone command
         var potentialPaths = ["/var/folders/zz"]
         if !defaultRun { potentialPaths.append("/tmp") }
-        else {
-            print("Cleaning up temporary directories prior to starting...")
-        }
 
          for p in potentialPaths {
              let enumerator = FileManager.default.enumerator(atPath: p)
@@ -233,6 +264,11 @@ class Command {
          print("--collect-dirs -> specify locations of (space-separated) directories to dump those raw files")
          print("    usage: --collect-dirs /Users/<USER>/Downloads /tmp")
          print("--deep -> performs deep scan and captures metadata from Users entire directory (WARNING: this may be time-consuming)")
+         print("--disable -> disable a set of aftermath features that may collect personal user data")
+         print("    usage: --disable browsers browser-killswitch databases filesystem proc-info slack ul")
+         print("           --disable all")
+         print("--es-logs -> specify which Endpoint Security events (space-separated) to collect (defaults are: create exec mmap)")
+         print("    usage: --es-logs exec open rename")
          print("--logs -> specify an external text file with unified log predicates to parse")
          print("    usage: --logs /Users/<USER>/Desktop/myPredicates.txt")
          print("--pretty -> colorize Terminal output")
